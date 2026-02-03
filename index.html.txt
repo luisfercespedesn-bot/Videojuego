@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mario 3D Studio: Warp Edition</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/DragControls.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #111827; color: white; font-family: sans-serif; }
+        canvas { display: block; }
+        .ui-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            background: rgba(31, 41, 55, 0.95);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6);
+            width: 320px;
+            border: 1px solid #4b5563;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .stats-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 10px;
+            border: 2px solid #fbbf24;
+            color: #fbbf24;
+            font-weight: bold;
+            font-size: 1.2rem;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="stats-panel" id="scoreBoard">
+        Coins: 0
+    </div>
+
+    <div class="ui-panel">
+        <h2 class="text-2xl font-black mb-4 text-yellow-400 flex items-center gap-2">
+            <span>🍄</span> Warp Studio 3D
+        </h2>
+        
+        <div class="bg-blue-900/30 border border-blue-500/50 p-3 rounded-lg mb-4 text-xs text-blue-100">
+            <p><strong>NUEVO:</strong></p>
+            <p>• Párate sobre una tubería y presiona <b>FLECHA ABAJO</b> para teletransportarte.</p>
+            <p>• Los Goombas ahora caminan solos.</p>
+        </div>
+
+        <div class="space-y-4">
+            <div>
+                <label class="block text-sm font-bold mb-2 text-gray-300">Elemento a añadir:</label>
+                <select id="entityType" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white outline-none">
+                    <option value="pipe">Tubería (Warp)</option>
+                    <option value="coin">Moneda</option>
+                    <option value="goomba">Goomba (Caminante)</option>
+                    <option value="koopa">Koopa Troopa</option>
+                    <option value="mario">Mario (Jugador)</option>
+                    <option value="block">Bloque "?"</option>
+                </select>
+            </div>
+
+            <button onclick="spawnEntity()" class="w-full bg-green-600 hover:bg-green-500 text-white font-black py-3 rounded-lg transition-all shadow-lg">
+                DESPLEGAR OBJETO
+            </button>
+
+            <button onclick="clearScene()" class="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-2 rounded-lg transition-colors text-sm">
+                Reiniciar Escena
+            </button>
+        </div>
+    </div>
+
+    <script>
+        let scene, camera, renderer, controls, dragControls, raycaster, mouse;
+        let objects = [];
+        let coins = [];
+        let pipes = [];
+        let goombas = [];
+        let playableMario = null;
+        let score = 0;
+        let isWarping = false;
+
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        function playSound(type) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            if (type === 'jump') {
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.12);
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.12);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.12);
+            } else if (type === 'coin') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(987, audioCtx.currentTime);
+                osc.frequency.setValueAtTime(1318, audioCtx.currentTime + 0.08);
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.4);
+            } else if (type === 'warp') {
+                osc.type = 'triangle';
+                for(let i=0; i<8; i++) {
+                    osc.frequency.setValueAtTime(400 - (i*40), audioCtx.currentTime + (i*0.05));
+                }
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.5);
+            }
+        }
+
+        const moveState = { forward: 0, back: 0, left: 0, right: 0, jumping: false, vY: 0 };
+        const GRAVITY = -0.015;
+        const JUMP_FORCE = 0.35;
+        const SPEED = 0.18;
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x5c94fc); 
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(20, 20, 20);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+
+            raycaster = new THREE.Raycaster();
+            mouse = new THREE.Vector2();
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+            scene.add(ambientLight);
+
+            const sunLight = new THREE.DirectionalLight(0xffffff, 1);
+            sunLight.position.set(10, 30, 10);
+            sunLight.castShadow = true;
+            scene.add(sunLight);
+
+            setupEnvironment();
+            setupInteractions();
+            
+            // Mario inicial y dos tuberías para probar el warp
+            playableMario = createMario(0, 0, 0);
+            scene.add(playableMario);
+            objects.push(playableMario);
+
+            spawnPipe(-5, 0, -5);
+            spawnPipe(5, 0, 5);
+
+            animate();
+        }
+
+        function setupEnvironment() {
+            const grid = new THREE.GridHelper(80, 80, 0xffffff, 0x334155);
+            grid.position.y = -0.01;
+            scene.add(grid);
+            const axes = new THREE.AxesHelper(40);
+            scene.add(axes);
+        }
+
+        function setupInteractions() {
+            dragControls = new THREE.DragControls(objects, camera, renderer.domElement);
+            dragControls.addEventListener('dragstart', () => controls.enabled = false);
+            dragControls.addEventListener('dragend', () => controls.enabled = true);
+
+            window.addEventListener('keydown', (e) => {
+                if (isWarping) return;
+                switch(e.code) {
+                    case 'ArrowUp': moveState.forward = 1; break;
+                    case 'ArrowDown': 
+                        moveState.back = 1; 
+                        checkWarp(); // Intentar entrar en tubería
+                        break;
+                    case 'ArrowLeft': moveState.left = 1; break;
+                    case 'ArrowRight': moveState.right = 1; break;
+                    case 'Space': 
+                        if (!moveState.jumping && playableMario) {
+                            moveState.jumping = true;
+                            moveState.vY = JUMP_FORCE;
+                            playSound('jump');
+                        }
+                        break;
+                }
+            });
+
+            window.addEventListener('keyup', (e) => {
+                switch(e.code) {
+                    case 'ArrowUp': moveState.forward = 0; break;
+                    case 'ArrowDown': moveState.back = 0; break;
+                    case 'ArrowLeft': moveState.left = 0; break;
+                    case 'ArrowRight': moveState.right = 0; break;
+                }
+            });
+
+            window.addEventListener('dblclick', (event) => {
+                mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObjects(objects, true);
+                if (intersects.length > 0) {
+                    let target = intersects[0].object;
+                    while (target.parent && !target.isMarioEntity) target = target.parent;
+                    if (target === playableMario) playableMario = null;
+                    scene.remove(target);
+                    objects = objects.filter(o => o !== target);
+                    coins = coins.filter(c => c !== target);
+                    pipes = pipes.filter(p => p !== target);
+                    goombas = goombas.filter(g => g !== target);
+                }
+            });
+        }
+
+        // --- Lógica de Warp ---
+        function checkWarp() {
+            if (!playableMario || pipes.length < 2) return;
+            
+            pipes.forEach(pipe => {
+                const dist = new THREE.Vector2(playableMario.position.x, playableMario.position.z)
+                             .distanceTo(new THREE.Vector2(pipe.position.x, pipe.position.z));
+                
+                if (dist < 1.2 && !isWarping && playableMario.position.y < 0.5) {
+                    executeWarp(pipe);
+                }
+            });
+        }
+
+        function executeWarp(entryPipe) {
+            isWarping = true;
+            playSound('warp');
+
+            // Encontrar otra tubería de destino
+            const otherPipes = pipes.filter(p => p !== entryPipe);
+            const exitPipe = otherPipes[Math.floor(Math.random() * otherPipes.length)];
+
+            // Animación de entrada
+            let startY = playableMario.position.y;
+            let step = 0;
+            const interval = setInterval(() => {
+                step += 0.05;
+                playableMario.position.y -= 0.1;
+                
+                if (step >= 1.5) {
+                    clearInterval(interval);
+                    // Mover a la posición de salida (bajo tierra)
+                    playableMario.position.set(exitPipe.position.x, -2, exitPipe.position.z);
+                    
+                    // Animación de salida
+                    setTimeout(() => {
+                        playSound('warp');
+                        const outInterval = setInterval(() => {
+                            playableMario.position.y += 0.1;
+                            if (playableMario.position.y >= 0) {
+                                playableMario.position.y = 0;
+                                clearInterval(outInterval);
+                                isWarping = false;
+                            }
+                        }, 20);
+                    }, 500);
+                }
+            }, 20);
+        }
+
+        // --- Modelos ---
+
+        function createMario(x, y, z) {
+            const group = new THREE.Group();
+            const body = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1, 0.5), new THREE.MeshPhongMaterial({color: 0xff0000}));
+            body.position.y = 0.5;
+            const head = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.7), new THREE.MeshPhongMaterial({color: 0xffcc99}));
+            head.position.y = 1.3;
+            const hat = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.2, 0.8), new THREE.MeshPhongMaterial({color: 0xff0000}));
+            hat.position.y = 1.7;
+            group.add(body, head, hat);
+            group.position.set(x, y, z);
+            group.isMarioEntity = true;
+            return group;
+        }
+
+        function createGoomba(x, y, z) {
+            const group = new THREE.Group();
+            const head = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.8, 1), new THREE.MeshPhongMaterial({color: 0x8b4513}));
+            head.position.y = 0.7;
+            const body = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.6, 0.5, 8), new THREE.MeshPhongMaterial({color: 0xf5f5dc}));
+            body.position.y = 0.25;
+            group.add(head, body);
+            group.position.set(x, y, z);
+            group.isMarioEntity = true;
+            group.walkDir = new THREE.Vector3(Math.random()-0.5, 0, Math.random()-0.5).normalize();
+            return group;
+        }
+
+        function createPipe(x, y, z) {
+            const group = new THREE.Group();
+            const body = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.1, 2, 20), new THREE.MeshPhongMaterial({color: 0x228b22}));
+            const top = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.3, 0.7, 20), new THREE.MeshPhongMaterial({color: 0x228b22}));
+            top.position.y = 1;
+            group.add(body, top);
+            group.position.set(x, y, z);
+            group.isMarioEntity = true;
+            group.isPipe = true;
+            return group;
+        }
+
+        function createCoin(x, y, z) {
+            const mesh = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.5, 0.5, 0.1, 16),
+                new THREE.MeshPhongMaterial({color: 0xffd700, emissive: 0x332200})
+            );
+            mesh.rotation.x = Math.PI / 2;
+            mesh.position.set(x, y + 1, z);
+            mesh.isMarioEntity = true;
+            mesh.isCoin = true;
+            return mesh;
+        }
+
+        function spawnPipe(x, y, z) {
+            const p = createPipe(x, y, z);
+            scene.add(p);
+            objects.push(p);
+            pipes.push(p);
+        }
+
+        function spawnEntity() {
+            const type = document.getElementById('entityType').value;
+            let entity;
+            const rx = Math.random() * 30 - 15;
+            const rz = Math.random() * 30 - 15;
+            
+            switch(type) {
+                case 'coin': entity = createCoin(rx, 0, rz); coins.push(entity); break;
+                case 'goomba': entity = createGoomba(rx, 0, rz); goombas.push(entity); break;
+                case 'koopa': 
+                    const group = new THREE.Group();
+                    const shell = new THREE.Mesh(new THREE.SphereGeometry(0.7, 12, 12), new THREE.MeshPhongMaterial({color: 0x00ff00}));
+                    shell.scale.y = 0.6; shell.position.y = 0.4;
+                    group.add(shell); group.position.set(rx, 0, rz); group.isMarioEntity = true;
+                    entity = group; break;
+                case 'mario': entity = createMario(0, 0, 0); playableMario = entity; break;
+                case 'pipe': spawnPipe(rx, 0, rz); return;
+                case 'block': 
+                    entity = new THREE.Mesh(new THREE.BoxGeometry(1.5,1.5,1.5), new THREE.MeshPhongMaterial({color:0xffa500}));
+                    entity.position.set(rx, 2, rz); entity.isMarioEntity = true; break;
+            }
+            if(entity) { scene.add(entity); objects.push(entity); }
+        }
+
+        function clearScene() {
+            objects.forEach(obj => scene.remove(obj));
+            objects = []; coins = []; pipes = []; goombas = [];
+            playableMario = null; score = 0;
+            document.getElementById('scoreBoard').innerText = "Coins: 0";
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (playableMario && !isWarping) {
+                playableMario.position.z += (moveState.back - moveState.forward) * SPEED;
+                playableMario.position.x += (moveState.right - moveState.left) * SPEED;
+
+                if (moveState.jumping) {
+                    playableMario.position.y += moveState.vY;
+                    moveState.vY += GRAVITY;
+                    if (playableMario.position.y <= 0) {
+                        playableMario.position.y = 0;
+                        moveState.jumping = false;
+                        moveState.vY = 0;
+                    }
+                }
+
+                if (moveState.forward || moveState.back || moveState.left || moveState.right) {
+                    playableMario.rotation.y = Math.atan2(moveState.right - moveState.left, moveState.back - moveState.forward);
+                }
+
+                // Monedas
+                coins.forEach((coin, index) => {
+                    if (playableMario.position.distanceTo(coin.position) < 1.3) {
+                        playSound('coin');
+                        scene.remove(coin);
+                        coins.splice(index, 1);
+                        objects = objects.filter(o => o !== coin);
+                        score++;
+                        document.getElementById('scoreBoard').innerText = "Coins: " + score;
+                    }
+                });
+            }
+
+            // IA de Goombas
+            goombas.forEach(g => {
+                g.position.addScaledVector(g.walkDir, 0.03);
+                if (Math.abs(g.position.x) > 35 || Math.abs(g.position.z) > 35) {
+                    g.walkDir.negate();
+                }
+                if (Math.random() < 0.01) {
+                    g.walkDir.set(Math.random()-0.5, 0, Math.random()-0.5).normalize();
+                }
+                g.rotation.y = Math.atan2(g.walkDir.x, g.walkDir.z);
+            });
+
+            // Animaciones
+            objects.forEach(obj => {
+                if (obj.isCoin) obj.rotation.y += 0.06;
+                else if (obj.isMarioEntity && obj !== playableMario && !obj.isPipe) obj.rotation.y += 0.01;
+            });
+
+            if (controls) controls.update();
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        window.onload = init;
+    </script>
+</body>
+</html>
