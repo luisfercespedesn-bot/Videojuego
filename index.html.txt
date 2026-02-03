@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visualizador 3D: Mario Edition</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #111827; color: white; font-family: sans-serif; }
+        canvas { display: block; }
+        .ui-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            background: rgba(31, 41, 55, 0.95);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6);
+            width: 320px;
+            border: 1px solid #4b5563;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .legend {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            border: 1px solid #374151;
+        }
+        select option { background: #1f2937; }
+    </style>
+</head>
+<body>
+
+    <div class="ui-panel">
+        <h2 class="text-2xl font-black mb-4 text-yellow-400 flex items-center gap-2">
+            <span>🍄</span> Mario 3D Plotter
+        </h2>
+        
+        <div class="space-y-4">
+            <!-- Selección de Figura -->
+            <div>
+                <label class="block text-sm font-bold mb-2 text-gray-300">Seleccionar Figura:</label>
+                <select id="entityType" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-yellow-500 outline-none">
+                    <option value="point">Punto Simple (Esfera)</option>
+                    <option value="mario">Mario (Abstracto)</option>
+                    <option value="mushroom">Champiñón</option>
+                    <option value="pipe">Tubería Verde</option>
+                    <option value="block">Bloque "?"</option>
+                </select>
+            </div>
+
+            <!-- Coordenadas -->
+            <div>
+                <label class="block text-sm font-bold mb-1 text-gray-300">Coordenadas (X, Y, Z)</label>
+                <div class="grid grid-cols-3 gap-2">
+                    <div class="flex flex-col">
+                        <span class="text-[10px] text-center text-red-400 font-bold">X</span>
+                        <input type="number" id="posX" value="0" step="1" class="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-white text-center">
+                    </div>
+                    <div class="flex flex-col">
+                        <span class="text-[10px] text-center text-green-400 font-bold">Y</span>
+                        <input type="number" id="posY" value="0" step="1" class="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-white text-center">
+                    </div>
+                    <div class="flex flex-col">
+                        <span class="text-[10px] text-center text-blue-400 font-bold">Z</span>
+                        <input type="number" id="posZ" value="0" step="1" class="bg-gray-700 border border-gray-600 rounded px-2 py-1 text-white text-center">
+                    </div>
+                </div>
+            </div>
+
+            <button onclick="spawnEntity()" class="w-full bg-yellow-500 hover:bg-yellow-400 text-gray-900 font-black py-3 rounded-lg transition-all transform active:scale-95 shadow-lg">
+                ¡APARECER!
+            </button>
+
+            <button onclick="clearScene()" class="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-2 rounded-lg transition-colors text-sm">
+                Limpiar Escena
+            </button>
+        </div>
+
+        <div class="mt-6 pt-4 border-t border-gray-700 text-xs text-gray-400 leading-relaxed">
+            <strong>Controles:</strong><br>
+            • Click Izquierdo: Rotar cámara<br>
+            • Click Derecho: Desplazar plano<br>
+            • Rueda: Zoom +/-
+        </div>
+    </div>
+
+    <div class="legend space-y-1">
+        <div class="flex items-center gap-2"><div class="w-3 h-3 bg-red-500 rounded-full"></div> Eje X</div>
+        <div class="flex items-center gap-2"><div class="w-3 h-3 bg-green-500 rounded-full"></div> Eje Y (Altura)</div>
+        <div class="flex items-center gap-2"><div class="w-3 h-3 bg-blue-500 rounded-full"></div> Eje Z</div>
+    </div>
+
+    <script>
+        let scene, camera, renderer, controls;
+        let objects = [];
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x22c55e); 
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(12, 12, 12);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+            scene.add(ambientLight);
+
+            const sunLight = new THREE.DirectionalLight(0xffffff, 1);
+            sunLight.position.set(10, 20, 10);
+            sunLight.castShadow = true;
+            scene.add(sunLight);
+
+            setupEnvironment();
+            animate();
+        }
+
+        function setupEnvironment() {
+            const grid = new THREE.GridHelper(30, 30, 0x000000, 0x444444);
+            grid.position.y = -0.01;
+            scene.add(grid);
+
+            const axes = new THREE.AxesHelper(15);
+            scene.add(axes);
+        }
+
+        function createMario(x, y, z) {
+            const group = new THREE.Group();
+            const body = new THREE.Mesh(new THREE.BoxGeometry(1, 1.2, 0.6), new THREE.MeshPhongMaterial({color: 0xff0000}));
+            body.position.y = 0.6;
+            const legs = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.5, 0.7), new THREE.MeshPhongMaterial({color: 0x0000ff}));
+            legs.position.y = 0.2;
+            const head = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 0.8), new THREE.MeshPhongMaterial({color: 0xffcc99}));
+            head.position.y = 1.6;
+            const hat = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.2, 0.9), new THREE.MeshPhongMaterial({color: 0xff0000}));
+            hat.position.y = 2.0;
+            group.add(body, legs, head, hat);
+            group.position.set(x, y, z);
+            return group;
+        }
+
+        function createMushroom(x, y, z) {
+            const group = new THREE.Group();
+            const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.6, 16), new THREE.MeshPhongMaterial({color: 0xffffff}));
+            const cap = new THREE.Mesh(new THREE.SphereGeometry(0.8, 16, 16, 0, Math.PI * 2, 0, Math.PI/2), new THREE.MeshPhongMaterial({color: 0xff0000}));
+            cap.position.y = 0.3;
+            group.add(stem, cap);
+            group.position.set(x, y, z);
+            return group;
+        }
+
+        function createPipe(x, y, z) {
+            const group = new THREE.Group();
+            const body = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 2, 20), new THREE.MeshPhongMaterial({color: 0x228b22}));
+            const top = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 0.5, 20), new THREE.MeshPhongMaterial({color: 0x228b22}));
+            top.position.y = 1;
+            group.add(body, top);
+            group.position.set(x, y, z);
+            return group;
+        }
+
+        function createBlock(x, y, z) {
+            const mesh = new THREE.Mesh(
+                new THREE.BoxGeometry(1.5, 1.5, 1.5),
+                new THREE.MeshPhongMaterial({color: 0xffa500})
+            );
+            mesh.position.set(x, y + 0.75, z);
+            return mesh;
+        }
+
+        function createPoint(x, y, z) {
+            const mesh = new THREE.Mesh(
+                new THREE.SphereGeometry(0.3, 16, 16),
+                new THREE.MeshPhongMaterial({color: 0xffff00})
+            );
+            mesh.position.set(x, y, z);
+            return mesh;
+        }
+
+        function spawnEntity() {
+            const type = document.getElementById('entityType').value;
+            const x = parseFloat(document.getElementById('posX').value) || 0;
+            const y = parseFloat(document.getElementById('posY').value) || 0;
+            const z = parseFloat(document.getElementById('posZ').value) || 0;
+
+            let entity;
+            switch(type) {
+                case 'mario': entity = createMario(x, y, z); break;
+                case 'mushroom': entity = createMushroom(x, y, z); break;
+                case 'pipe': entity = createPipe(x, y, z); break;
+                case 'block': entity = createBlock(x, y, z); break;
+                default: entity = createPoint(x, y, z);
+            }
+
+            scene.add(entity);
+            objects.push(entity);
+        }
+
+        function clearScene() {
+            objects.forEach(obj => scene.remove(obj));
+            objects = [];
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (controls) controls.update();
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        window.onload = init;
+    </script>
+</body>
+</html>
